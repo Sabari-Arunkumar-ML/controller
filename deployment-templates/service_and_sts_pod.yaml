@@ -1,0 +1,96 @@
+kind: Service
+apiVersion: v1
+metadata:
+  name: <prefix>-<sim-identifier>-<sequence>
+spec:
+  type: LoadBalancer
+  selector:
+    app: <prefix>-<sim-identifier>-app-<sequence>
+  ports:
+    - protocol: TCP
+      port: <service-port-1>
+      targetPort: <container-port-1>
+      name: port-1
+    - protocol: TCP
+      port: <service-port-2>
+      targetPort: <container-port-2>
+      name: port-2
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: <prefix>-<sim-identifier>-<sequence>
+  labels:
+    app: <prefix>-<sim-identifier>-app-<sequence>
+spec:
+  replicas: 1
+  serviceName: <prefix>-service-<sequence>
+  selector:
+    matchLabels:
+      app: <prefix>-<sim-identifier>-app-<sequence>
+  template:
+    metadata:
+      labels:
+        app: <prefix>-<sim-identifier>-app-<sequence>
+    spec:
+      volumes:
+        - name: host-files
+          hostPath:
+            path: <host-sim-data-path>
+            type: Directory
+        - name: copied-files
+          persistentVolumeClaim:
+            claimName: <prefix>-<sim-identifier>-<sequence>-pvc
+      initContainers:
+        - name: copy-files
+          image: busybox 
+          command: ['sh', '-c', 'cp -r /opt/sim/* /opt/sim-data/']
+          volumeMounts:
+            - name: host-files
+              mountPath: /opt/sim/
+            - name: copied-files
+              mountPath: /opt/sim-data/ 
+      restartPolicy: Always
+      containers:
+      - name: <prefix>-<sim-identifier>-container
+        image: sabariarunkumarp/respond-ip-and-mac:4
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: POD_IP
+          value: 0.0.0.0
+        ports:
+        - containerPort: <container-port-1>
+          name: port-1
+        - containerPort: <container-port-2>
+          name: port-2
+        volumeMounts:
+          - name: copied-files
+            mountPath: /opt/sim-data/
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: <prefix>-<sim-identifier>-<sequence>-pv
+  finalizers: []
+spec:
+  capacity:
+    storage: 50Mi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Delete
+  hostPath:
+    path: <pod-storage-dir><prefix>-<sim-identifier>-<sequence>
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: <prefix>-<sim-identifier>-<sequence>-pvc
+  finalizers: []
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 50Mi
+---
