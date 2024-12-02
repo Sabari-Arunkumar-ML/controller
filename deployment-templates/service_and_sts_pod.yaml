@@ -53,7 +53,7 @@ spec:
       restartPolicy: Always
       containers:
       - name: <prefix>-<sim-identifier>-container
-        image: sabariarunkumarp/respond-ip-and-mac:4
+        image: <image>
         imagePullPolicy: IfNotPresent
         env:
         - name: POD_IP

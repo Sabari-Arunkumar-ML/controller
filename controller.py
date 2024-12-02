@@ -16,10 +16,12 @@ EXTRACTED_RESPONSE_ROOT_DIR="/tmp/pod-storage/"
 EXTRACTED_RESPONSE_PATH=EXTRACTED_RESPONSE_ROOT_DIR+"sim-data/"
 parser = argparse.ArgumentParser(description="Runtime arguments for the application.")
 
+IMAGE="sabariarunkumarp/respond-ip-and-mac:4"
 SERVICE_PORT_1="8080"
 CONTAINER_PORT_1="8080"
 SERVICE_PORT_2="80"
 CONTAINER_PORT_2="80"
+
 SIM_IDENTIFIER="vftd"
 
 parser.add_argument(
@@ -154,7 +156,7 @@ def setup_logger(name: str, log_file: str = None, level: int = logging.INFO) -> 
     return logger
 
 logger = setup_logger("app")
-KUBECTL_BINARY_PATH_PATH_AS_LIST = KUBECTL_BINARY_PATH.split(' ')  
+KUBECTL_BINARY_PATH_AS_LIST = KUBECTL_BINARY_PATH.split(' ')  
 def deploy_metallb_ippool_and_adv(ip_pool):
     temp_file_name=None
     try:
@@ -167,7 +169,7 @@ def deploy_metallb_ippool_and_adv(ip_pool):
         
         logger.debug("Temporary file for deploying Metallb IPPool and l2adv: %s",temp_file_name)
         
-        command = KUBECTL_BINARY_PATH_PATH_AS_LIST + ["apply", "-f", temp_file_name]
+        command = KUBECTL_BINARY_PATH_AS_LIST + ["apply", "-f", temp_file_name]
         process = subprocess.run(command, text=True, capture_output=True)
         
         if process.returncode == 0:
@@ -183,7 +185,7 @@ def deploy_metallb_ippool_and_adv(ip_pool):
 
 def list_ippool():
     try:
-        command = KUBECTL_BINARY_PATH_PATH_AS_LIST + ["get", "ipaddresspool", "-A"]
+        command = KUBECTL_BINARY_PATH_AS_LIST + ["get", "ipaddresspool", "-A"]
         process = subprocess.run(command, text=True, capture_output=True)
         if process.returncode == 0:
             logger.info("IPPools :\n%s", process.stdout)
@@ -212,7 +214,7 @@ def get_next_valid_sequence_for_pod_and_service(name_prefix):
         while True:
             seq_val = seq_val + 1
             pod_name = name_prefix + "-"+SIM_IDENTIFIER+"-"+ str(seq_val)+"-0"
-            command = KUBECTL_BINARY_PATH_PATH_AS_LIST + ["get", "pods", pod_name]
+            command = KUBECTL_BINARY_PATH_AS_LIST + ["get", "pods", pod_name]
             process = subprocess.run(command, text=True, capture_output=True)
             if process.returncode == 0:
                 logger.info("pod %s exist status :\n%s", pod_name, process.stdout)
@@ -240,6 +242,7 @@ def deploy_pod_and_service(num_ftd, seq_num, name_prefix):
         content = content.replace("<prefix>", name_prefix)
         content = content.replace("<host-sim-data-path>", EXTRACTED_RESPONSE_PATH)
         content = content.replace("<sim-identifier>", SIM_IDENTIFIER)
+        content = content.replace("<image>", IMAGE)
         content = content.replace("<service-port-1>", SERVICE_PORT_1)
         content = content.replace("<container-port-1>", CONTAINER_PORT_1)
         content = content.replace("<service-port-2>", SERVICE_PORT_2)
@@ -256,7 +259,7 @@ def deploy_pod_and_service(num_ftd, seq_num, name_prefix):
             
             logger.debug("Temporary file for deploying pod with sequence number %d: %s",  current_seq_num, temp_file_name)
             
-            command = KUBECTL_BINARY_PATH_PATH_AS_LIST + ["apply", "-f", temp_file_name]
+            command = KUBECTL_BINARY_PATH_AS_LIST + ["apply", "-f", temp_file_name]
             process = subprocess.run(command, text=True, capture_output=True)
             
             if process.returncode == 0:
@@ -391,7 +394,7 @@ def delete_sts_pods(prefix=None):
         for statefulset in statefulsets_to_delete:
             if SIM_IDENTIFIER not in statefulset:
                 continue
-            delete_command = KUBECTL_BINARY_PATH_PATH_AS_LIST + ["delete", "statefulset", statefulset, "--force", "--grace-period=0"] 
+            delete_command = KUBECTL_BINARY_PATH_AS_LIST + ["delete", "statefulset", statefulset, "--force", "--grace-period=0"] 
             delete_result = subprocess.run(delete_command, capture_output=True, text=True)
             if delete_result.returncode == 0:
                     logger.info("%s", delete_result.stdout)
@@ -431,7 +434,7 @@ def delete_pv_and_pvc(prefix=None):
                 logger.debug("%s", patch_result.stdout)
             else:
                 logger.debug("Patching is not complete %s", patch_result)
-            delete_command = KUBECTL_BINARY_PATH_PATH_AS_LIST + ["delete", "pvc", pvc, "--force", "--grace-period=0"] 
+            delete_command = KUBECTL_BINARY_PATH_AS_LIST + ["delete", "pvc", pvc, "--force", "--grace-period=0"] 
             delete_result = subprocess.run(delete_command, capture_output=True, text=True)
             if delete_result.returncode == 0:
                 logger.info("%s", delete_result.stdout)
@@ -464,7 +467,7 @@ def delete_service(prefix=None):
         for service in services_to_delete:
             if SIM_IDENTIFIER not in service:
                 continue
-            delete_command = KUBECTL_BINARY_PATH_PATH_AS_LIST + ["delete", "svc", service] 
+            delete_command = KUBECTL_BINARY_PATH_AS_LIST + ["delete", "svc", service] 
             delete_result = subprocess.run(delete_command, capture_output=True, text=True)
             if delete_result.returncode == 0:
                 logger.info("%s", delete_result.stdout)
@@ -482,9 +485,9 @@ def delete_service(prefix=None):
 def delete_ippool_and_adv(ip_pool=None):
     try:
         if ip_pool is None:
-            command = KUBECTL_BINARY_PATH_PATH_AS_LIST + ["delete", "ipaddresspool","--all" ,"-n", METALLB_NAMESPACE]
+            command = KUBECTL_BINARY_PATH_AS_LIST + ["delete", "ipaddresspool","--all" ,"-n", METALLB_NAMESPACE]
         else:
-            command = KUBECTL_BINARY_PATH_PATH_AS_LIST + ["delete", "ipaddresspool", "pool-"+ip_pool , "-n", METALLB_NAMESPACE]
+            command = KUBECTL_BINARY_PATH_AS_LIST + ["delete", "ipaddresspool", "pool-"+ip_pool , "-n", METALLB_NAMESPACE]
         process = subprocess.run(command, text=True, capture_output=True)
         if process.returncode == 0:
             logger.info("Ippool delete status :\n%s", process.stdout)
@@ -494,9 +497,9 @@ def delete_ippool_and_adv(ip_pool=None):
         logger.error("An error occurred deleteing ippool:  %s", str(e))
     try:
         if ip_pool is None:
-            command = KUBECTL_BINARY_PATH_PATH_AS_LIST + ["delete", "l2advertisement", "--all" ,"-n", METALLB_NAMESPACE]
+            command = KUBECTL_BINARY_PATH_AS_LIST + ["delete", "l2advertisement", "--all" ,"-n", METALLB_NAMESPACE]
         else:
-            command = KUBECTL_BINARY_PATH_PATH_AS_LIST + ["delete", "l2advertisement", "adv-"+ip_pool , "-n", METALLB_NAMESPACE]
+            command = KUBECTL_BINARY_PATH_AS_LIST + ["delete", "l2advertisement", "adv-"+ip_pool , "-n", METALLB_NAMESPACE]
         process = subprocess.run(command, text=True, capture_output=True)
         if process.returncode == 0:
             logger.info("l2advertisement delete status :\n%s", process.stdout)

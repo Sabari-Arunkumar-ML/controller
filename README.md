@@ -8,7 +8,10 @@
   
 #### List All Resources
   python3 controller.py --list all
-  
+
+#### List POD/Service ips
+  python3 controller.py --list services
+
 #### List Resources for a name-prefix
   python3 controller.py --list-for-name-prefix release-v1 
  
@@ -18,11 +21,8 @@
 #### Delete Resources for a given name-prefix
   python3 controller.py --delete-for-name-prefix release-v2
  
-#### Delete Resources for a given name-prefix
-  python3 controller.py --delete-for-name-prefix release-v2
- 
-#### Delete Resources given pod's external ip
-  python3 controller.py --delete-with-ips 172.17.130.1
+#### Delete Resources given comma seperated pod's external ip
+  python3 controller.py --delete-with-ips 172.17.130.1,172.17.130.2
 
 #### Delete resources where pod's external ip is within the given range
   python3 controller.py --delete-on-range 172.17.130.1-172.17.130.3
