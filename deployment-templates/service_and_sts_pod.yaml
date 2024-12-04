@@ -55,14 +55,11 @@ spec:
       - name: <prefix>-<sim-identifier>-container
         image: <image>
         imagePullPolicy: IfNotPresent
-        env:
-        - name: POD_IP
-          value: 0.0.0.0
         ports:
         - containerPort: <container-port-1>
-          name: port-1
+          name: c-control-api
         - containerPort: <container-port-2>
-          name: port-2
+          name: c-sftunnel
         volumeMounts:
           - name: copied-files
             mountPath: /opt/sim-data/

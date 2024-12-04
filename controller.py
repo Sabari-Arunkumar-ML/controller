@@ -8,14 +8,24 @@ import shutil
 import zipfile
 import ipaddress
 import sys
+import requests
+import threading
+import time
+import socket
+
 
 METALLB_IP_ANNOUNCE_TEMPLATE_PATH="deployment-templates/metallb_pool_ip_announce.yaml"
 SVC_AND_STS_TEMPLATE_PATH="deployment-templates/service_and_sts_pod.yaml"
 SEQUENCE_NUMBER_FILE="sequence.txt"
-PROPERTY_FILE="properties.txt"
+PROPERTY_FILE="properties.json"
 METALLB_NAMESPACE="metallb-system"
+FTD_API_ADD_MANAGER_PATH="ftd-simulator/v1/manager"
 
 parser = argparse.ArgumentParser(description="Runtime arguments for the application.")
+pods_requiring_fmc_config = set()
+lock = threading.Lock()
+stop_event = threading.Event()
+
 
 # Will take values from PROPERTY_FILE
 IMAGE=None
@@ -26,6 +36,7 @@ CONTAINER_PORT_2=None
 SIM_IDENTIFIER=None
 KUBECTL_BINARY_PATH=None
 POD_HOST_STORAGE_LOCATION = None
+FMC_REG_KEY=None
 
 parser.add_argument(
     "--num-ftd",
@@ -148,7 +159,7 @@ def setup_logger(name: str, log_file: str = None, level: int = logging.INFO) -> 
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
-
+    logger.propagate = False
     if log_file:
         file_handler = logging.FileHandler(log_file)
         file_handler.setFormatter(formatter)
@@ -163,7 +174,7 @@ logger.info("Issued User Command => %s", ' '.join(sys.argv))
 
 def read_prop_file():
     global IMAGE, SERVICE_PORT_1, CONTAINER_PORT_1, SERVICE_PORT_2
-    global CONTAINER_PORT_2, SIM_IDENTIFIER, KUBECTL_BINARY_PATH, POD_HOST_STORAGE_LOCATION
+    global CONTAINER_PORT_2, SIM_IDENTIFIER, KUBECTL_BINARY_PATH, POD_HOST_STORAGE_LOCATION, FMC_REG_KEY
 
     # Read the existing JSON data
     try:
@@ -184,6 +195,7 @@ def read_prop_file():
     CONTAINER_PORT_2 = str(data.get("container_port_2", CONTAINER_PORT_2))
     SIM_IDENTIFIER = data.get("sim_identifier", SIM_IDENTIFIER)
     KUBECTL_BINARY_PATH = data.get("kubectl_path", KUBECTL_BINARY_PATH)
+    FMC_REG_KEY = data.get("regkey", FMC_REG_KEY)
     POD_HOST_STORAGE_LOCATION = data.get("pod_host_storage_location", POD_HOST_STORAGE_LOCATION)
     if not POD_HOST_STORAGE_LOCATION.endswith('/'):
         POD_HOST_STORAGE_LOCATION += '/'
@@ -192,7 +204,33 @@ read_prop_file()
 KUBECTL_BINARY_PATH_AS_LIST = KUBECTL_BINARY_PATH.split(' ')
 EXTRACTED_RESPONSE_PATH= POD_HOST_STORAGE_LOCATION+"sim-data/"
 
+def schedule_pods_requiring_FMC_config(pod_name):
+    with lock:
+        pods_requiring_fmc_config.add(pod_name)
+        logging.info("scheduled pod %s to get configured with FMC", pod_name)
+
+def configure_scheduled_pods_with_FMC(fmc_ip, reg_key):
+    local_pods=set()
+    with lock:
+        if pods_requiring_fmc_config:
+            local_pods.update(pods_requiring_fmc_config.copy())
+    pods_successfully_configured = set()
+    for pod in local_pods:
+        ip_svcname_map = get_ips_and_svcname_map_vftd(pod)
+        for external_ip, svcname in ip_svcname_map.items():
+            if external_ip != "<none>" and check_if_reachable(external_ip, CONTAINER_PORT_1):
+                isConfigured = configure_ftd_with_fmc_details(fmc_ip, external_ip, reg_key)
+                if isConfigured:
+                    pods_successfully_configured.add(pod)
+    with lock:
+        pods_requiring_fmc_config.difference_update(pods_successfully_configured)
     
+
+def trigger_configuring_scheduled_pods_with_FMC(fmc_ip, reg_key):
+    while not stop_event.is_set():
+        configure_scheduled_pods_with_FMC(fmc_ip, reg_key)
+        time.sleep(2)
+
 def deploy_metallb_ippool_and_adv(ip_pool):
     temp_file_name=None
     try:
@@ -286,6 +324,33 @@ def reset_sequence_number(name_prefix=None):
     except Exception as e:
         logger.error("An unexpected error occurred:: %s",str(e))
 
+
+def check_if_reachable(ip, port, timeout=2):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(timeout) 
+        result = sock.connect_ex((ip, int(port)))
+        return result == 0 
+    
+def configure_ftd_with_fmc_details(fmc_ip, ftd_ip, reg_key):
+    payload = {
+        "ipAddress": fmc_ip,
+        "regkey": reg_key
+    }
+    try:
+        url = f"http://{ftd_ip}:{CONTAINER_PORT_1}/{FTD_API_ADD_MANAGER_PATH}"
+        response = requests.post(url, json=payload)  
+        response.raise_for_status()  
+        if response.status_code == 200:
+            logger.info("Successfully configured FTD %s with FMC running on %s", ftd_ip, fmc_ip)
+            return True
+        else:
+            logger.error("Failed configuring FTD %s with FMC running on %s"
+                        +" Status Code :%d", ftd_ip, fmc_ip, response.status_code)
+    except requests.exceptions.RequestException as e:
+           logger.error("Request exception occurred while adding "
+                        +"FTD %s with FMC running on %s : %s" , ftd_ip, fmc_ip, str(e))
+    return False
+
 def deploy_pod_and_service(num_ftd, seq_num, name_prefix):
     try:
         with open(SVC_AND_STS_TEMPLATE_PATH, "r") as file:
@@ -315,12 +380,15 @@ def deploy_pod_and_service(num_ftd, seq_num, name_prefix):
             
             if process.returncode == 0:
                 logger.info("Deploy pod and service with sequence number %d status:\n%s", current_seq_num, process.stdout)
+                svc_name = name_prefix + "-"+SIM_IDENTIFIER+"-"+ str(current_seq_num)
+                schedule_pods_requiring_FMC_config(svc_name)
                 update_seq_num(args.name_prefix, current_seq_num)
             else:
                 logger.error("Error occurred in deploying pod and service with sequence number %d: %s",current_seq_num ,process.stderr)
             if os.path.exists(temp_file_name):
                 os.remove(temp_file_name)
                 logger.debug("Temporary file %s for deploying pod with sequence number %d is deleted",  temp_file_name, current_seq_num)
+            
     except Exception as e:
         logger.error("An error occurred in deploying pod and service: %s", str(e))
 
@@ -407,13 +475,15 @@ def get_svc_name_for_ips(ips):
     except Exception as e:
         logger.error("Failed to get Services: %s",str(e))
 
-
-def get_ips_and_svcname_map_all_vftd():
+def get_ips_and_svcname_map_vftd(svcname=None):
+    ip_svc_map={}
     try:
         get_service_command = KUBECTL_BINARY_PATH+" get svc"
-        grep_command = f"grep '{SIM_IDENTIFIER}'"
+        if svcname is None:
+            grep_command = f"grep '{SIM_IDENTIFIER}'"
+        else:
+            grep_command = f"grep '{svcname}'"
         awk_command = "awk '{print $1, $4}'"
-        ip_svc_map={}
         command = f"{get_service_command} | {grep_command} | {awk_command} "
         result = subprocess.run(command, shell=True, capture_output=True, text=True)
         if result.returncode == 0:
@@ -427,6 +497,7 @@ def get_ips_and_svcname_map_all_vftd():
             logger.error("Error occurred in getting IP-Services map for ftds : %s", result.stderr)
     except Exception as e:
         logger.error("An error occurred in gettibg IP-Services map for ftds: %s",str(e))
+    return ip_svc_map
 
 def delete_sts_pods(prefix=None):
     get_statefulsets_command = KUBECTL_BINARY_PATH+" get statefulsets"
@@ -627,7 +698,7 @@ if args.delete_on_range != "":
         start_ip, end_ip = args.delete_on_range.split('-')
         start_ip = ipaddress.IPv4Address(start_ip)
         end_ip = ipaddress.IPv4Address(end_ip)
-        ip_svcname_map =  get_ips_and_svcname_map_all_vftd()
+        ip_svcname_map =  get_ips_and_svcname_map_vftd()
         for target_ip, prefix in ip_svcname_map.items():
             if start_ip <= ipaddress.IPv4Address(target_ip) <= end_ip:
                 delete_sts_pods(prefix)
@@ -638,7 +709,10 @@ if args.delete_on_range != "":
         os._exit(1)
     
 
-if args.num_ftd > 0 and args.name_prefix != '' and args.response_zip:
+if args.num_ftd > 0 and args.name_prefix != '' and args.response_zip != '' and args.fmc_ip != '':
+    configure_fmc_details_thread = threading.Thread(target=trigger_configuring_scheduled_pods_with_FMC, args=(args.fmc_ip, FMC_REG_KEY))
+    configure_fmc_details_thread.start()
+    
     if not os.path.exists(POD_HOST_STORAGE_LOCATION):
         os.makedirs(POD_HOST_STORAGE_LOCATION,mode=0o777)
 
@@ -647,8 +721,16 @@ if args.num_ftd > 0 and args.name_prefix != '' and args.response_zip:
     
     with zipfile.ZipFile(args.response_zip, 'r') as zip_ref:
         zip_ref.extractall(POD_HOST_STORAGE_LOCATION)
-    logger.debug("Extracted sim data zip %s to %s",args.response_zip ,POD_HOST_STORAGE_LOCATION)
+    logger.debug("Extracted sim data zip %s to %s",args.response_zip, POD_HOST_STORAGE_LOCATION)
     starting_seq_num = get_next_valid_sequence_for_pod_and_service(args.name_prefix)
     deploy_pod_and_service(args.num_ftd, starting_seq_num,args.name_prefix)
-    
-
+    while True:
+        all_pods_configured_with_fmc = False
+        with lock:
+            if not pods_requiring_fmc_config:
+                all_pods_configured_with_fmc= True
+        if all_pods_configured_with_fmc:
+            break
+        time.sleep(5)
+    stop_event.set()
+    configure_fmc_details_thread.join()

@@ -1,0 +1,11 @@
+{
+    "image": "sabariarunkumarp/ftd-sim:8.31",
+    "service_port_1": 8080,
+    "container_port_1": 8080,
+    "service_port_2": 8305,
+    "container_port_2": 8305,
+    "sim_identifier": "vftd",
+    "pod_host_storage_location": "/tmp/pod-storage",
+    "kubectl_path": "microk8s kubectl",
+    "regkey": "cisco123"
+}
