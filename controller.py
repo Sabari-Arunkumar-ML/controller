@@ -7,22 +7,25 @@ import json
 import shutil
 import zipfile
 import ipaddress
+import sys
+
 METALLB_IP_ANNOUNCE_TEMPLATE_PATH="deployment-templates/metallb_pool_ip_announce.yaml"
 SVC_AND_STS_TEMPLATE_PATH="deployment-templates/service_and_sts_pod.yaml"
 SEQUENCE_NUMBER_FILE="sequence.txt"
-KUBECTL_BINARY_PATH="microk8s kubectl"
+PROPERTY_FILE="properties.txt"
 METALLB_NAMESPACE="metallb-system"
-EXTRACTED_RESPONSE_ROOT_DIR="/tmp/pod-storage/"
-EXTRACTED_RESPONSE_PATH=EXTRACTED_RESPONSE_ROOT_DIR+"sim-data/"
+
 parser = argparse.ArgumentParser(description="Runtime arguments for the application.")
 
-IMAGE="sabariarunkumarp/respond-ip-and-mac:4"
-SERVICE_PORT_1="8080"
-CONTAINER_PORT_1="8080"
-SERVICE_PORT_2="80"
-CONTAINER_PORT_2="80"
-
-SIM_IDENTIFIER="vftd"
+# Will take values from PROPERTY_FILE
+IMAGE=None
+SERVICE_PORT_1=None
+CONTAINER_PORT_1=None
+SERVICE_PORT_2=None
+CONTAINER_PORT_2=None
+SIM_IDENTIFIER=None
+KUBECTL_BINARY_PATH=None
+POD_HOST_STORAGE_LOCATION = None
 
 parser.add_argument(
     "--num-ftd",
@@ -122,8 +125,6 @@ parser.add_argument(
     help="Delete services [and associated pods] running on a specified comma-separated list of IPs",
 )
 
-args = parser.parse_args()
-
 def setup_logger(name: str, log_file: str = None, level: int = logging.INFO) -> logging.Logger:
     """
     Creates and returns a configured logger.
@@ -155,8 +156,43 @@ def setup_logger(name: str, log_file: str = None, level: int = logging.INFO) -> 
 
     return logger
 
-logger = setup_logger("app")
-KUBECTL_BINARY_PATH_AS_LIST = KUBECTL_BINARY_PATH.split(' ')  
+logger = setup_logger("controller", "history.txt")
+
+args = parser.parse_args()
+logger.info("Issued User Command => %s", ' '.join(sys.argv))
+
+def read_prop_file():
+    global IMAGE, SERVICE_PORT_1, CONTAINER_PORT_1, SERVICE_PORT_2
+    global CONTAINER_PORT_2, SIM_IDENTIFIER, KUBECTL_BINARY_PATH, POD_HOST_STORAGE_LOCATION
+
+    # Read the existing JSON data
+    try:
+        with open(PROPERTY_FILE, 'r') as file:
+            data = json.load(file)
+    except FileNotFoundError:
+        logger.error("File not found: %s",PROPERTY_FILE)
+        os._exit(1)
+    except json.JSONDecodeError:
+        logger.error("The file does not contain valid JSON.")
+        os._exit(1)
+        return
+
+    IMAGE = data.get("image", IMAGE)
+    SERVICE_PORT_1 = str(data.get("service_port_1", SERVICE_PORT_1))
+    CONTAINER_PORT_1 = str(data.get("container_port_1", CONTAINER_PORT_1))
+    SERVICE_PORT_2 = str(data.get("service_port_2", SERVICE_PORT_2))
+    CONTAINER_PORT_2 = str(data.get("container_port_2", CONTAINER_PORT_2))
+    SIM_IDENTIFIER = data.get("sim_identifier", SIM_IDENTIFIER)
+    KUBECTL_BINARY_PATH = data.get("kubectl_path", KUBECTL_BINARY_PATH)
+    POD_HOST_STORAGE_LOCATION = data.get("pod_host_storage_location", POD_HOST_STORAGE_LOCATION)
+    if not POD_HOST_STORAGE_LOCATION.endswith('/'):
+        POD_HOST_STORAGE_LOCATION += '/'
+read_prop_file()
+
+KUBECTL_BINARY_PATH_AS_LIST = KUBECTL_BINARY_PATH.split(' ')
+EXTRACTED_RESPONSE_PATH= POD_HOST_STORAGE_LOCATION+"sim-data/"
+
+    
 def deploy_metallb_ippool_and_adv(ip_pool):
     temp_file_name=None
     try:
@@ -201,9 +237,9 @@ def get_next_valid_sequence_for_pod_and_service(name_prefix):
         with open(SEQUENCE_NUMBER_FILE, "r") as file:
             current_seq_data = json.load(file)  
     except json.JSONDecodeError:
-        logger.error("Error: The file does not contain valid JSON.")
+        logger.error("The file does not contain valid JSON.")
     except FileNotFoundError:
-        logger.error("Error: File not found: %s",SEQUENCE_NUMBER_FILE)
+        logger.error("File not found: %s",SEQUENCE_NUMBER_FILE)
     except Exception as e:
         logger.error("An unexpected error occurred: %s",str(e))
         
@@ -231,7 +267,22 @@ def update_seq_num(name_prefix, seq_num):
         with open(SEQUENCE_NUMBER_FILE, "w") as file:
             json.dump(data, file, indent=2)
     except FileNotFoundError:
-        logger.error("Error: File not found: %s", SEQUENCE_NUMBER_FILE)
+        logger.error("File not found: %s", SEQUENCE_NUMBER_FILE)
+    except Exception as e:
+        logger.error("An unexpected error occurred:: %s",str(e))
+
+def reset_sequence_number(name_prefix=None):
+    try:
+        data = {}
+        if name_prefix is not None:
+            with open(SEQUENCE_NUMBER_FILE, "r") as file:
+                data = json.load(file)
+            if name_prefix in data:
+                del data[name_prefix]
+        with open(SEQUENCE_NUMBER_FILE, "w") as file:
+            json.dump(data, file)
+    except FileNotFoundError:
+        logger.error("File not found: %s", SEQUENCE_NUMBER_FILE)
     except Exception as e:
         logger.error("An unexpected error occurred:: %s",str(e))
 
@@ -247,7 +298,7 @@ def deploy_pod_and_service(num_ftd, seq_num, name_prefix):
         content = content.replace("<container-port-1>", CONTAINER_PORT_1)
         content = content.replace("<service-port-2>", SERVICE_PORT_2)
         content = content.replace("<container-port-2>", CONTAINER_PORT_2)
-        content = content.replace("<pod-storage-dir>", EXTRACTED_RESPONSE_ROOT_DIR)
+        content = content.replace("<pod-storage-dir>", POD_HOST_STORAGE_LOCATION)
         
         for current_seq_num in range(seq_num, seq_num + num_ftd):
             pod_and_svc_dep = content.replace("<sequence>", str(current_seq_num))
@@ -271,7 +322,7 @@ def deploy_pod_and_service(num_ftd, seq_num, name_prefix):
                 os.remove(temp_file_name)
                 logger.debug("Temporary file %s for deploying pod with sequence number %d is deleted",  temp_file_name, current_seq_num)
     except Exception as e:
-        logger.error("An error occurred indeploying pod and service: %s", str(e))
+        logger.error("An error occurred in deploying pod and service: %s", str(e))
 
 def list_pods(prefix=None):
     try:
@@ -352,9 +403,9 @@ def get_svc_name_for_ips(ips):
             logger.debug("Services names for ips %s :%s", str(ips), str(services))
             return services
         else:
-            logger.error("Error occurred in getting Services : %s", result.stderr)
+            logger.error("Failed to get Services : %s", result.stderr)
     except Exception as e:
-        logger.error("An error occurred in gettibg Services: %s",str(e))
+        logger.error("Failed to get Services: %s",str(e))
 
 
 def get_ips_and_svcname_map_all_vftd():
@@ -542,6 +593,7 @@ if args.delete != '':
         delete_service()
         delete_pv_and_pvc()
         delete_ippool_and_adv()
+        reset_sequence_number()
     if args.delete == "pods":
         delete_sts_pods()
     if args.delete == "services":
@@ -556,6 +608,7 @@ if args.delete_for_name_prefix != '':
     delete_sts_pods(args.delete_for_name_prefix)
     delete_service(args.delete_for_name_prefix)
     delete_pv_and_pvc(args.delete_for_name_prefix)
+    reset_sequence_number(args.delete_for_name_prefix)
     os._exit(0)
     
 if args.delete_ip_pool != '':
@@ -586,15 +639,15 @@ if args.delete_on_range != "":
     
 
 if args.num_ftd > 0 and args.name_prefix != '' and args.response_zip:
-    if not os.path.exists(EXTRACTED_RESPONSE_ROOT_DIR):
-        os.makedirs(EXTRACTED_RESPONSE_ROOT_DIR,mode=0o777)
+    if not os.path.exists(POD_HOST_STORAGE_LOCATION):
+        os.makedirs(POD_HOST_STORAGE_LOCATION,mode=0o777)
 
     if os.path.exists(EXTRACTED_RESPONSE_PATH):
         shutil.rmtree(EXTRACTED_RESPONSE_PATH)
     
     with zipfile.ZipFile(args.response_zip, 'r') as zip_ref:
-        zip_ref.extractall(EXTRACTED_RESPONSE_ROOT_DIR)
-    logger.debug("Extracted sim data zip %s to %s",args.response_zip ,EXTRACTED_RESPONSE_ROOT_DIR)
+        zip_ref.extractall(POD_HOST_STORAGE_LOCATION)
+    logger.debug("Extracted sim data zip %s to %s",args.response_zip ,POD_HOST_STORAGE_LOCATION)
     starting_seq_num = get_next_valid_sequence_for_pod_and_service(args.name_prefix)
     deploy_pod_and_service(args.num_ftd, starting_seq_num,args.name_prefix)
     

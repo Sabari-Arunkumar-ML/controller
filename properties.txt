@@ -1,0 +1,10 @@
+{
+    "image": "sabariarunkumarp/respond-ip-and-mac:4",
+    "service_port_1": 8080,
+    "container_port_1": 8080,
+    "service_port_2": 80,
+    "container_port_2": 80,
+    "sim_identifier": "vftd",
+    "pod_host_storage_location": "/tmp/pod-storage",
+    "kubectl_path": "microk8s kubectl"
+}
